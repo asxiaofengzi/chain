@@ -129,7 +129,7 @@ if __name__ == "__main__":
     parser.add_argument("--input", "-i", type=str, default="D:\yolo\pic", help="输入图片目录")
     parser.add_argument("--output", "-o", type=str, default="results", help="输出结果目录")
     parser.add_argument("--model", "-m", type=str, default="best.pt", help="YOLOv8模型路径")
-    parser.add_argument("--conf", "-c", type=float, default=0.1, help="置信度阈值")
+    parser.add_argument("--conf", "-c", type=float, default=0.6, help="置信度阈值")
     parser.add_argument("--no-save", action="store_false", dest="save_annotated", help="不保存标注后的图片")
     parser.add_argument("--crops", action="store_true", help="保存裁剪的缺陷区域")
     

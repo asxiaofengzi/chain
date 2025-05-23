@@ -17,12 +17,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("铁链缺陷检测系统")
         self.setMinimumSize(1200, 800)
-        
-        # 初始化组件
+          # 初始化组件
         self.cameras = []
         self.detector = YoloDetector(model_path="best.pt")
         self.running = False
         self.defect_detected = False
+        self.defect_camera_id = -1  # 记录检测到缺陷的摄像头ID
         self.current_frames = [None, None, None, None]
         
         # 设置中心部件
@@ -96,11 +96,13 @@ class MainWindow(QMainWindow):
         self.stop_btn = QPushButton("停止检测")
         self.mark_btn = QPushButton("标记缺陷")
         self.save_btn = QPushButton("保存图像")
+        self.continue_btn = QPushButton("继续检测")  # 新增继续检测按钮
         
         # 设置按钮状态
         self.stop_btn.setEnabled(False)
         self.mark_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
+        self.continue_btn.setEnabled(False)  # 默认禁用继续检测按钮
         
         # 添加弹性空间，使按钮居中
         control_layout.addStretch(1)
@@ -110,6 +112,7 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.stop_btn)
         control_layout.addWidget(self.mark_btn)
         control_layout.addWidget(self.save_btn)
+        control_layout.addWidget(self.continue_btn)  # 将继续检测按钮添加到布局
         
         # 添加弹性空间
         control_layout.addStretch(1)
@@ -119,6 +122,7 @@ class MainWindow(QMainWindow):
         self.stop_btn.clicked.connect(self.stop_detection)
         self.mark_btn.clicked.connect(self.mark_defect)
         self.save_btn.clicked.connect(self.save_image)
+        self.continue_btn.clicked.connect(self.continue_detection)  # 连接继续检测按钮信号
         
         # 添加标题标签
         title_label = QLabel("铁链缺陷检测系统")
@@ -143,10 +147,11 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(True)
         self.mark_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
-        
-        # 开始检测
+        self.continue_btn.setEnabled(False)  # 禁用继续检测按钮
+          # 开始检测
         self.running = True
         self.defect_detected = False
+        self.defect_camera_id = -1  # 重置检测到缺陷的摄像头ID
         self.timer.start(30)  # 约33FPS
     
     def stop_detection(self):
@@ -163,6 +168,7 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.mark_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
+        self.continue_btn.setEnabled(False)  # 禁用继续检测按钮
     
     def update_frames(self):
         if not self.running:
@@ -173,12 +179,12 @@ class MainWindow(QMainWindow):
             frame = camera.get_frame()
             if frame is not None:
                 self.current_frames[i] = frame.copy()
-                
-                # 进行检测
+                  # 进行检测
                 if not self.defect_detected:
                     results = self.detector.detect(frame)
                     if len(results.boxes) > 0:  # 检测到缺陷
                         self.defect_detected = True
+                        self.defect_camera_id = i  # 记录检测到缺陷的摄像头ID
                         for j in range(4):
                             self.cameras[j].pause()  # 暂停所有摄像头
                         
@@ -188,6 +194,7 @@ class MainWindow(QMainWindow):
                         # 改变按钮状态
                         self.mark_btn.setEnabled(True)
                         self.save_btn.setEnabled(True)
+                        self.continue_btn.setEnabled(True)  # 启用继续检测按钮
                         
                         QMessageBox.information(self, "检测结果", f"摄像头 {i+1} 检测到缺陷!")
                 
@@ -198,29 +205,55 @@ class MainWindow(QMainWindow):
         # 标记当前帧上的缺陷
         if self.defect_detected:
             for i, frame in enumerate(self.current_frames):
-                if frame is not None:
-                    # 获取标记后的帧
+                if frame is not None:                    # 获取标记后的帧
                     marked_frame = self.detector.draw_detections(frame)
                     self.cameras[i].update_image(marked_frame)
     
     def save_image(self):
         # 保存当前帧
-        if self.defect_detected:
-            # 创建保存目录
-            save_dir = os.path.join("defects", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+        if self.defect_detected and self.defect_camera_id >= 0:
+            # 创建保存目录 - 只使用年月日
+            today = datetime.datetime.now().strftime("%Y%m%d")
+            save_dir = os.path.join("defects", today)
             os.makedirs(save_dir, exist_ok=True)
             
-            for i, frame in enumerate(self.current_frames):
-                if frame is not None:
-                    # 获取标记后的帧
-                    marked_frame = self.detector.draw_detections(frame)
-                    # 保存图像
-                    save_path = os.path.join(save_dir, f"camera_{i+1}.jpg")
-                    cv2.imwrite(save_path, marked_frame)
+            # 只保存检测到缺陷的摄像头图像
+            frame = self.current_frames[self.defect_camera_id]
+            if frame is not None:
+                # 获取标记后的帧
+                marked_frame = self.detector.draw_detections(frame)
+                
+                # 使用时间作为文件名，避免覆盖
+                time_str = datetime.datetime.now().strftime("%H%M%S")
+                save_path = os.path.join(save_dir, f"camera_{self.defect_camera_id+1}_{time_str}.jpg")
+                
+                cv2.imwrite(save_path, marked_frame)
+                QMessageBox.information(self, "保存成功", f"已保存摄像头 {self.defect_camera_id+1} 的缺陷图像到 {save_dir}")
+    
+    def continue_detection(self):
+        """继续检测，清除当前检测结果并重新开始检测"""
+        print("继续检测按钮被点击")
+        
+        if not self.running:
+            print("检测未在运行状态，无法继续")
+            return
             
-            QMessageBox.information(self, "保存成功", f"已保存缺陷图像到 {save_dir}")
+        # 重置检测状态
+        self.defect_detected = False
+        
+        # 恢复所有摄像头
+        for camera in self.cameras:
+            camera.resume()
+        
+        # 更新按钮状态
+        self.mark_btn.setEnabled(False)
+        self.save_btn.setEnabled(False)
+        self.continue_btn.setEnabled(False)
+        
+        # 重新开始检测
+        self.timer.start(30)
     
     def closeEvent(self, event):
         # 程序关闭时停止所有摄像头
         self.stop_detection()
-        event.accept() 
+        event.accept()
