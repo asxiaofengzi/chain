@@ -25,6 +25,7 @@ class MainWindow(QMainWindow):
         self.defect_detected = False
         self.defect_camera_id = -1  # 记录检测到缺陷的摄像头ID
         self.current_frames = [None, None, None, None]
+        self.camera_defect_status = [False, False, False, False]  # 记录每个摄像头的缺陷检测状态
         self.video_mode = False  # 标记是否为视频演示模式
         
         # 设置中心部件
@@ -164,6 +165,7 @@ class MainWindow(QMainWindow):
         self.running = True
         self.defect_detected = False
         self.defect_camera_id = -1  # 重置检测到缺陷的摄像头ID
+        self.camera_defect_status = [False, False, False, False]  # 重置每个摄像头的缺陷状态
         self.timer.start(30)  # 约33FPS
     
     def stop_detection(self):
@@ -241,10 +243,23 @@ class MainWindow(QMainWindow):
                     # 在视频模式下，只处理第一个摄像头
                     if self.video_mode and i > 0:
                         continue
-                        
-                    # 获取标记后的帧
-                    marked_frame = self.detector.draw_detections(frame)
-                    self.cameras[i].update_image(marked_frame)
+                    
+                    # 在实时检测模式下，只对检测到缺陷的摄像头或活跃的摄像头进行标注
+                    if not self.video_mode:
+                        # 检查摄像头是否正在运行
+                        camera = self.cameras[i]
+                        if camera.capture is None:
+                            continue  # 跳过未启动的摄像头
+                    
+                    # 对当前帧重新进行检测以获取准确的检测结果
+                    results = self.detector.detect(frame)
+                    if len(results.boxes) > 0:
+                        # 只有检测到缺陷的摄像头才显示标注
+                        marked_frame = self.detector.draw_detections(frame)
+                        self.cameras[i].update_image(marked_frame)
+                    else:
+                        # 没有检测到缺陷的摄像头显示原始图像
+                        self.cameras[i].update_image(frame)
     
     def save_image(self):
         # 保存当前帧
@@ -292,6 +307,7 @@ class MainWindow(QMainWindow):
             
         # 重置检测状态
         self.defect_detected = False
+        self.camera_defect_status = [False, False, False, False]  # 重置每个摄像头的缺陷状态
         
         # 如果在视频模式下，不需要恢复摄像头（因为视频模式下没有暂停）
         if not self.video_mode:
