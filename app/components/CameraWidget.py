@@ -14,6 +14,7 @@ class CameraWidget(QWidget):
         self.paused = False
         self.title = f"Camera {camera_id + 1}"
         self.show_title = False  # 添加标志控制是否显示标题
+        self.video_file_mode = False  # 标记是否为视频文件模式
         
         # 设置标签用于显示视频
         self.layout = QVBoxLayout(self)
@@ -48,10 +49,11 @@ class CameraWidget(QWidget):
         # 在图像中心添加文字
         font = cv2.FONT_HERSHEY_SIMPLEX
         text = self.title
-        text_size = cv2.getTextSize(text, font, 1, 2)[0]
+        font_scale = 1.5  # 增大字体比例
+        text_size = cv2.getTextSize(text, font, font_scale, 2)[0]
         text_x = (blank_image.shape[1] - text_size[0]) // 2
         text_y = (blank_image.shape[0] + text_size[1]) // 2
-        cv2.putText(blank_image, text, (text_x, text_y), font, 1, (200, 200, 200), 2, cv2.LINE_AA)
+        cv2.putText(blank_image, text, (text_x, text_y), font, font_scale, (200, 200, 200), 2, cv2.LINE_AA)
         
         # 将占位图显示在组件上
         self.update_image(blank_image)
@@ -88,7 +90,7 @@ class CameraWidget(QWidget):
             
             # 设置摄像头参数 (可选)
             self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1024)
             
             # 读取一帧测试是否正常
             ret, frame = self.capture.read()
@@ -113,11 +115,49 @@ class CameraWidget(QWidget):
                 self.capture = None
             return False
     
+    def set_video_file(self, video_path):
+        """从视频文件加载视频"""
+        try:
+            # 如果已经有打开的摄像头或视频，先关闭
+            if self.capture is not None:
+                self.capture.release()
+                self.capture = None
+            
+            # 使用视频文件
+            self.capture = cv2.VideoCapture(video_path)
+            
+            if not self.capture.isOpened():
+                print(f"无法打开视频文件: {video_path}")
+                return False
+            
+            # 标记为视频文件模式
+            self.video_file_mode = True
+            self.title = f"Video {self.camera_id + 1}"
+            self.show_title = True
+            
+            # 获取并输出视频信息
+            width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = self.capture.get(cv2.CAP_PROP_FPS)
+            print(f"成功打开视频文件: {video_path}")
+            print(f"视频信息: 分辨率 {width}x{height}, FPS: {fps}")
+            
+            self.paused = False
+            return True
+        except Exception as e:
+            print(f"设置视频文件时出错: {e}")
+            if self.capture is not None:
+                self.capture.release()
+                self.capture = None
+            return False
+
     def stop(self):
-        """停止摄像头"""
+        """停止摄像头或视频"""
         if self.capture is not None:
             self.capture.release()
             self.capture = None
+        # 重置视频文件模式
+        self.video_file_mode = False
         # 停止显示标题
         self.show_title = False
         # 恢复到占位图
@@ -146,8 +186,18 @@ class CameraWidget(QWidget):
                 self.frame = frame
                 self.mutex.unlock()
                 return frame
+            elif self.video_file_mode:
+                # 视频文件播放结束，重新开始播放
+                print(f"视频 {self.camera_id + 1} 播放结束，重新开始")
+                self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0)  # 重置到第一帧
+                ret, frame = self.capture.read()
+                if ret:
+                    self.mutex.lock()
+                    self.frame = frame
+                    self.mutex.unlock()
+                    return frame
         except Exception as e:
-            print(f"获取摄像头帧时出错: {e}")
+            print(f"获取帧时出错: {e}")
             
         return None
     
@@ -179,15 +229,15 @@ class CameraWidget(QWidget):
             # 只在需要显示标题时绘制
             if self.show_title:
                 # 绘制半透明背景
-                painter.fillRect(0, 0, pixmap.width(), 30, QColor(0, 0, 0, 150))
+                painter.fillRect(0, 0, pixmap.width(), 35, QColor(0, 0, 0, 150))
                 
                 # 设置字体
-                font = QFont("Arial", 10, QFont.Bold)
+                font = QFont("Arial", 14, QFont.Bold)
                 painter.setFont(font)
                 
                 # 绘制文本
                 painter.setPen(Qt.white)
-                painter.drawText(10, 20, self.title)
+                painter.drawText(12, 24, self.title)
             
             painter.end()
             

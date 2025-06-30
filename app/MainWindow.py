@@ -17,13 +17,15 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("铁链缺陷检测系统")
         self.setMinimumSize(1200, 800)
-          # 初始化组件
+        
+        # 初始化组件
         self.cameras = []
         self.detector = YoloDetector(model_path="best.pt")
         self.running = False
         self.defect_detected = False
         self.defect_camera_id = -1  # 记录检测到缺陷的摄像头ID
         self.current_frames = [None, None, None, None]
+        self.video_mode = False  # 标记是否为视频演示模式
         
         # 设置中心部件
         self.central_widget = QWidget()
@@ -43,10 +45,11 @@ class MainWindow(QMainWindow):
                 color: white;
                 border: none;
                 border-radius: 4px;
-                padding: 8px 16px;
+                padding: 10px 20px;
                 font-weight: bold;
-                min-width: 100px;
-                height: 36px;
+                font-size: 16px;
+                min-width: 120px;
+                height: 42px;
             }
             QPushButton:hover {
                 background-color: #1E88E5;
@@ -97,6 +100,8 @@ class MainWindow(QMainWindow):
         self.mark_btn = QPushButton("标记缺陷")
         self.save_btn = QPushButton("保存图像")
         self.continue_btn = QPushButton("继续检测")  # 新增继续检测按钮
+        self.select_video_btn = QPushButton("选择视频")  # 新增选择视频按钮
+        self.select_video_btn.setHidden(True)
         
         # 设置按钮状态
         self.stop_btn.setEnabled(False)
@@ -113,6 +118,7 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.mark_btn)
         control_layout.addWidget(self.save_btn)
         control_layout.addWidget(self.continue_btn)  # 将继续检测按钮添加到布局
+        control_layout.addWidget(self.select_video_btn)  # 添加选择视频按钮
         
         # 添加弹性空间
         control_layout.addStretch(1)
@@ -123,10 +129,11 @@ class MainWindow(QMainWindow):
         self.mark_btn.clicked.connect(self.mark_defect)
         self.save_btn.clicked.connect(self.save_image)
         self.continue_btn.clicked.connect(self.continue_detection)  # 连接继续检测按钮信号
+        self.select_video_btn.clicked.connect(self.select_video)  # 连接选择视频按钮信号
         
         # 添加标题标签
         title_label = QLabel("铁链缺陷检测系统")
-        title_font = QFont("Arial", 14, QFont.Bold)
+        title_font = QFont("Arial", 18, QFont.Bold)
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignCenter)
         
@@ -136,6 +143,9 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(control_layout, 1)  # 控制按钮占据1/6的空间
     
     def start_detection(self):
+        # 关闭视频模式
+        self.video_mode = False
+        
         # 启动所有摄像头
         for i, camera in enumerate(self.cameras):
             if not camera.start():
@@ -148,7 +158,9 @@ class MainWindow(QMainWindow):
         self.mark_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
         self.continue_btn.setEnabled(False)  # 禁用继续检测按钮
-          # 开始检测
+        self.select_video_btn.setEnabled(True)  # 启用选择视频按钮
+        
+        # 开始检测
         self.running = True
         self.defect_detected = False
         self.defect_camera_id = -1  # 重置检测到缺陷的摄像头ID
@@ -163,12 +175,16 @@ class MainWindow(QMainWindow):
         for camera in self.cameras:
             camera.stop()
         
+        # 重置视频模式
+        self.video_mode = False
+        
         # 改变按钮状态
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.mark_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
         self.continue_btn.setEnabled(False)  # 禁用继续检测按钮
+        self.select_video_btn.setEnabled(True)  # 启用选择视频按钮
     
     def update_frames(self):
         if not self.running:
@@ -176,20 +192,35 @@ class MainWindow(QMainWindow):
         
         # 获取每个摄像头的当前帧
         for i, camera in enumerate(self.cameras):
+            # 在视频模式下，只处理第一个摄像头
+            if self.video_mode and i > 0:
+                continue
+                
             frame = camera.get_frame()
             if frame is not None:
                 self.current_frames[i] = frame.copy()
-                  # 进行检测
-                if not self.defect_detected:
+                
+                # 进行检测
+                if not self.defect_detected or self.video_mode:
                     results = self.detector.detect(frame)
+                    
                     if len(results.boxes) > 0:  # 检测到缺陷
+                        # 在视频模式下，绘制检测结果但不暂停
+                        if self.video_mode:
+                            # 直接在视频帧上绘制检测结果
+                            marked_frame = self.detector.draw_detections(frame)
+                            camera.update_image(marked_frame)
+                            continue
+                        
+                        # 非视频模式的正常处理流程
                         self.defect_detected = True
                         self.defect_camera_id = i  # 记录检测到缺陷的摄像头ID
                         for j in range(4):
                             self.cameras[j].pause()  # 暂停所有摄像头
                         
-                        # 发送低电平信号
-                        send_low_signal()
+                        # 发送低电平信号 (仅在实时检测模式)
+                        if not self.video_mode:
+                            send_low_signal()
                         
                         # 改变按钮状态
                         self.mark_btn.setEnabled(True)
@@ -198,37 +229,58 @@ class MainWindow(QMainWindow):
                         
                         QMessageBox.information(self, "检测结果", f"摄像头 {i+1} 检测到缺陷!")
                 
-                # 用检测结果更新摄像头视图
-                camera.update_image(frame)
+                # 在没有检测到缺陷或视频模式下，正常更新图像
+                if not self.defect_detected or self.video_mode:
+                    camera.update_image(frame)
     
     def mark_defect(self):
         # 标记当前帧上的缺陷
-        if self.defect_detected:
+        if self.defect_detected or self.video_mode:
             for i, frame in enumerate(self.current_frames):
-                if frame is not None:                    # 获取标记后的帧
+                if frame is not None:
+                    # 在视频模式下，只处理第一个摄像头
+                    if self.video_mode and i > 0:
+                        continue
+                        
+                    # 获取标记后的帧
                     marked_frame = self.detector.draw_detections(frame)
                     self.cameras[i].update_image(marked_frame)
     
     def save_image(self):
         # 保存当前帧
+        camera_id = 0  # 默认使用第一个摄像头
+        
+        # 根据情况选择要保存的摄像头
         if self.defect_detected and self.defect_camera_id >= 0:
-            # 创建保存目录 - 只使用年月日
-            today = datetime.datetime.now().strftime("%Y%m%d")
-            save_dir = os.path.join("defects", today)
-            os.makedirs(save_dir, exist_ok=True)
+            camera_id = self.defect_camera_id
+        elif self.video_mode:
+            camera_id = 0  # 视频模式使用第一个摄像头
+        else:
+            return  # 如果没有检测到缺陷且不是视频模式，不执行保存
             
-            # 只保存检测到缺陷的摄像头图像
-            frame = self.current_frames[self.defect_camera_id]
-            if frame is not None:
-                # 获取标记后的帧
-                marked_frame = self.detector.draw_detections(frame)
-                
-                # 使用时间作为文件名，避免覆盖
-                time_str = datetime.datetime.now().strftime("%H%M%S")
-                save_path = os.path.join(save_dir, f"camera_{self.defect_camera_id+1}_{time_str}.jpg")
-                
-                cv2.imwrite(save_path, marked_frame)
-                QMessageBox.information(self, "保存成功", f"已保存摄像头 {self.defect_camera_id+1} 的缺陷图像到 {save_dir}")
+        # 创建保存目录 - 只使用年月日
+        today = datetime.datetime.now().strftime("%Y%m%d")
+        save_dir = os.path.join("defects", today)
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # 获取选定摄像头的当前帧
+        frame = self.current_frames[camera_id]
+        if frame is not None:
+            # 获取标记后的帧
+            marked_frame = self.detector.draw_detections(frame)
+            
+            # 使用时间作为文件名，避免覆盖
+            time_str = datetime.datetime.now().strftime("%H%M%S")
+            prefix = "video" if self.video_mode else f"camera_{camera_id+1}"
+            save_path = os.path.join(save_dir, f"{prefix}_{time_str}.jpg")
+            
+            cv2.imwrite(save_path, marked_frame)
+            
+            # 根据模式显示不同的提示信息
+            if self.video_mode:
+                QMessageBox.information(self, "保存成功", f"已保存视频帧缺陷图像到 {save_dir}")
+            else:
+                QMessageBox.information(self, "保存成功", f"已保存摄像头 {camera_id+1} 的缺陷图像到 {save_dir}")
     
     def continue_detection(self):
         """继续检测，清除当前检测结果并重新开始检测"""
@@ -241,17 +293,58 @@ class MainWindow(QMainWindow):
         # 重置检测状态
         self.defect_detected = False
         
-        # 恢复所有摄像头
-        for camera in self.cameras:
-            camera.resume()
+        # 如果在视频模式下，不需要恢复摄像头（因为视频模式下没有暂停）
+        if not self.video_mode:
+            # 恢复所有摄像头
+            for camera in self.cameras:
+                camera.resume()
         
         # 更新按钮状态
         self.mark_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
         self.continue_btn.setEnabled(False)
+        self.select_video_btn.setEnabled(True)  # 启用选择视频按钮
         
         # 重新开始检测
         self.timer.start(30)
+    
+    def select_video(self):
+        """选择视频文件进行演示检测"""
+        # 停止当前正在进行的检测
+        if self.running:
+            self.stop_detection()
+        
+        # 打开文件选择对话框
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择视频文件", "", "视频文件 (*.mp4 *.avi *.mkv *.mov);;所有文件 (*)", options=options
+        )
+        
+        if not file_path:
+            return  # 用户取消了选择
+            
+        # 设置视频模式标志
+        self.video_mode = True
+        
+        # 为第一个摄像头窗口加载视频文件
+        if self.cameras[0].set_video_file(file_path):
+            # 改变按钮状态
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+            self.mark_btn.setEnabled(False)
+            self.save_btn.setEnabled(False)
+            self.continue_btn.setEnabled(False)
+            self.select_video_btn.setEnabled(False)
+            
+            # 开始检测
+            self.running = True
+            self.defect_detected = False
+            self.timer.start(30)  # 约33FPS
+            
+            QMessageBox.information(self, "视频模式", "已进入视频演示模式，检测到缺陷时不会停止视频播放。")
+        else:
+            self.video_mode = False
+            QMessageBox.critical(self, "错误", "无法打开视频文件，请确认文件格式正确。")
     
     def closeEvent(self, event):
         # 程序关闭时停止所有摄像头
