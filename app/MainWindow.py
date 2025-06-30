@@ -26,7 +26,20 @@ class MainWindow(QMainWindow):
         self.defect_camera_id = -1  # 记录检测到缺陷的摄像头ID
         self.current_frames = [None, None, None, None]
         self.camera_defect_status = [False, False, False, False]  # 记录每个摄像头的缺陷检测状态
+        self.defect_cameras = []  # 记录所有检测到缺陷的摄像头列表
+        self.defect_details = {}  # 记录每个摄像头的详细缺陷信息
         self.video_mode = False  # 标记是否为视频演示模式
+        
+        # 缺陷类型中文映射
+        self.defect_type_mapping = {
+            'damage': '损坏',
+            'misplace': '错位',
+            'rough': '粗糙',
+            'discard': '丢弃',
+            'lowandhigh': '高低不平',
+            'asymmetric': '不对称',
+            'scratch': '划痕'
+        }
         
         # 设置中心部件
         self.central_widget = QWidget()
@@ -166,6 +179,8 @@ class MainWindow(QMainWindow):
         self.defect_detected = False
         self.defect_camera_id = -1  # 重置检测到缺陷的摄像头ID
         self.camera_defect_status = [False, False, False, False]  # 重置每个摄像头的缺陷状态
+        self.defect_cameras = []  # 重置缺陷摄像头列表
+        self.defect_details = {}  # 重置缺陷详细信息
         self.timer.start(30)  # 约33FPS
     
     def stop_detection(self):
@@ -192,6 +207,11 @@ class MainWindow(QMainWindow):
         if not self.running:
             return
         
+        # 在每次更新开始时，清空当前轮次的缺陷检测信息
+        current_defect_cameras = []
+        current_defect_details = {}
+        any_defect_detected = False
+        
         # 获取每个摄像头的当前帧
         for i, camera in enumerate(self.cameras):
             # 在视频模式下，只处理第一个摄像头
@@ -202,39 +222,129 @@ class MainWindow(QMainWindow):
             if frame is not None:
                 self.current_frames[i] = frame.copy()
                 
-                # 进行检测
+                # 进行检测（在实时模式下，总是进行检测以支持多摄像头）
                 if not self.defect_detected or self.video_mode:
                     results = self.detector.detect(frame)
                     
                     if len(results.boxes) > 0:  # 检测到缺陷
                         # 在视频模式下，绘制检测结果但不暂停
                         if self.video_mode:
+                            # 获取缺陷信息并输出到控制台
+                            defect_info = self.get_defect_info(results)
+                            print(f"视频模式 - 摄像头{i+1}检测到缺陷: {defect_info}")
+                            
                             # 直接在视频帧上绘制检测结果
                             marked_frame = self.detector.draw_detections(frame)
                             camera.update_image(marked_frame)
                             continue
                         
-                        # 非视频模式的正常处理流程
-                        self.defect_detected = True
-                        self.defect_camera_id = i  # 记录检测到缺陷的摄像头ID
-                        for j in range(4):
-                            self.cameras[j].pause()  # 暂停所有摄像头
-                        
-                        # 发送低电平信号 (仅在实时检测模式)
-                        if not self.video_mode:
-                            send_low_signal()
-                        
-                        # 改变按钮状态
-                        self.mark_btn.setEnabled(True)
-                        self.save_btn.setEnabled(True)
-                        self.continue_btn.setEnabled(True)  # 启用继续检测按钮
-                        
-                        QMessageBox.information(self, "检测结果", f"摄像头 {i+1} 检测到缺陷!")
+                        # 实时检测模式：收集所有检测到缺陷的摄像头信息
+                        any_defect_detected = True
+                        current_defect_cameras.append(i)
+                        current_defect_details[i] = self.get_defect_info(results)
                 
                 # 在没有检测到缺陷或视频模式下，正常更新图像
                 if not self.defect_detected or self.video_mode:
                     camera.update_image(frame)
+        
+        # 如果检测到缺陷且不在视频模式下，处理检测结果
+        if any_defect_detected and not self.video_mode and not self.defect_detected:
+            self.defect_detected = True
+            self.defect_cameras = current_defect_cameras
+            self.defect_details = current_defect_details
+            self.defect_camera_id = current_defect_cameras[0]  # 保持兼容性，使用第一个
+            
+            # 暂停所有摄像头
+            for j in range(4):
+                self.cameras[j].pause()
+            
+            # 发送低电平信号
+            send_low_signal()
+            
+            # 改变按钮状态
+            self.mark_btn.setEnabled(True)
+            self.save_btn.setEnabled(True)
+            self.continue_btn.setEnabled(True)
+            
+            # 生成多摄像头缺陷信息
+            defect_summary = self.generate_multi_camera_defect_info()
+            QMessageBox.information(self, "检测结果", defect_summary)
     
+    def generate_multi_camera_defect_info(self):
+        """
+        生成多摄像头缺陷检测的汇总信息
+        
+        返回:
+            包含所有检测到缺陷的摄像头信息的字符串
+        """
+        if not self.defect_cameras:
+            return "未检测到缺陷"
+        
+        camera_count = len(self.defect_cameras)
+        
+        if camera_count == 1:
+            # 单个摄像头检测到缺陷
+            camera_id = self.defect_cameras[0]
+            return f"摄像头 {camera_id + 1} 检测到缺陷!\n\n{self.defect_details[camera_id]}"
+        else:
+            # 多个摄像头检测到缺陷
+            summary = f"⚠️ 同时有 {camera_count} 个摄像头检测到缺陷!\n\n"
+            
+            for i, camera_id in enumerate(self.defect_cameras):
+                summary += f"📹 摄像头 {camera_id + 1}:\n"
+                # 移除"检测到的缺陷类型:"前缀，直接显示缺陷信息
+                defect_info = self.defect_details[camera_id]
+                clean_info = defect_info.replace("检测到的缺陷类型:\n", "")
+                summary += clean_info
+                
+                if i < camera_count - 1:  # 不是最后一个摄像头
+                    summary += "\n" + "-" * 30 + "\n"
+            
+            return summary
+
+    def get_defect_info(self, results):
+        """
+        解析检测结果，返回中文缺陷信息
+        
+        参数:
+            results: YOLO检测结果
+            
+        返回:
+            包含缺陷类型和置信度的中文描述字符串
+        """
+        defect_info = "检测到的缺陷类型:\n"
+        
+        # 获取检测框、类别和置信度
+        classes = results.boxes.cls.cpu().numpy()
+        confidences = results.boxes.conf.cpu().numpy()
+        
+        # 统计每种缺陷类型
+        defect_counts = {}
+        for i, cls_id in enumerate(classes):
+            cls_id = int(cls_id)
+            conf = confidences[i]
+            
+            # 获取类别名称
+            class_name = results.names[cls_id]
+            
+            # 转换为中文名称
+            chinese_name = self.defect_type_mapping.get(class_name, class_name)
+            
+            # 统计缺陷数量和最高置信度
+            if chinese_name not in defect_counts:
+                defect_counts[chinese_name] = {'count': 0, 'max_conf': 0}
+            
+            defect_counts[chinese_name]['count'] += 1
+            defect_counts[chinese_name]['max_conf'] = max(defect_counts[chinese_name]['max_conf'], conf)
+        
+        # 生成缺陷信息字符串
+        for defect_name, info in defect_counts.items():
+            count = info['count']
+            max_conf = info['max_conf']
+            defect_info += f"• {defect_name}: {count}处 (置信度: {max_conf:.2f})\n"
+        
+        return defect_info.rstrip()  # 移除最后的换行符
+
     def mark_defect(self):
         # 标记当前帧上的缺陷
         if self.defect_detected or self.video_mode:
@@ -263,39 +373,61 @@ class MainWindow(QMainWindow):
     
     def save_image(self):
         # 保存当前帧
-        camera_id = 0  # 默认使用第一个摄像头
-        
-        # 根据情况选择要保存的摄像头
-        if self.defect_detected and self.defect_camera_id >= 0:
-            camera_id = self.defect_camera_id
-        elif self.video_mode:
-            camera_id = 0  # 视频模式使用第一个摄像头
-        else:
-            return  # 如果没有检测到缺陷且不是视频模式，不执行保存
+        if self.video_mode:
+            # 视频模式：保存第一个摄像头
+            self._save_single_camera_image(0, "video")
+        elif self.defect_detected and self.defect_cameras:
+            # 实时检测模式：保存所有检测到缺陷的摄像头
+            saved_cameras = []
+            for camera_id in self.defect_cameras:
+                if self._save_single_camera_image(camera_id, f"camera_{camera_id+1}"):
+                    saved_cameras.append(camera_id + 1)
             
-        # 创建保存目录 - 只使用年月日
+            if saved_cameras:
+                today = datetime.datetime.now().strftime("%Y%m%d")
+                save_dir = os.path.join("defects", today)
+                camera_list = "、".join([f"摄像头{cam}" for cam in saved_cameras])
+                QMessageBox.information(self, "保存成功", f"已保存 {camera_list} 的缺陷图像到 {save_dir}")
+        else:
+            QMessageBox.warning(self, "保存失败", "没有检测到缺陷，无法保存图像")
+    
+    def _save_single_camera_image(self, camera_id, prefix):
+        """
+        保存单个摄像头的图像
+        
+        参数:
+            camera_id: 摄像头ID
+            prefix: 文件名前缀
+            
+        返回:
+            bool: 是否保存成功
+        """
+        # 创建保存目录
         today = datetime.datetime.now().strftime("%Y%m%d")
         save_dir = os.path.join("defects", today)
         os.makedirs(save_dir, exist_ok=True)
         
-        # 获取选定摄像头的当前帧
+        # 获取摄像头的当前帧
         frame = self.current_frames[camera_id]
         if frame is not None:
-            # 获取标记后的帧
-            marked_frame = self.detector.draw_detections(frame)
-            
-            # 使用时间作为文件名，避免覆盖
-            time_str = datetime.datetime.now().strftime("%H%M%S")
-            prefix = "video" if self.video_mode else f"camera_{camera_id+1}"
-            save_path = os.path.join(save_dir, f"{prefix}_{time_str}.jpg")
-            
-            cv2.imwrite(save_path, marked_frame)
-            
-            # 根据模式显示不同的提示信息
-            if self.video_mode:
-                QMessageBox.information(self, "保存成功", f"已保存视频帧缺陷图像到 {save_dir}")
-            else:
-                QMessageBox.information(self, "保存成功", f"已保存摄像头 {camera_id+1} 的缺陷图像到 {save_dir}")
+            # 重新检测该帧以获取准确的检测结果
+            results = self.detector.detect(frame)
+            if len(results.boxes) > 0 or self.video_mode:
+                # 获取标记后的帧
+                marked_frame = self.detector.draw_detections(frame)
+                
+                # 使用时间作为文件名，避免覆盖
+                time_str = datetime.datetime.now().strftime("%H%M%S")
+                save_path = os.path.join(save_dir, f"{prefix}_{time_str}.jpg")
+                
+                cv2.imwrite(save_path, marked_frame)
+                
+                if self.video_mode:
+                    QMessageBox.information(self, "保存成功", f"已保存视频帧缺陷图像到 {save_dir}")
+                
+                return True
+        
+        return False
     
     def continue_detection(self):
         """继续检测，清除当前检测结果并重新开始检测"""
@@ -308,6 +440,8 @@ class MainWindow(QMainWindow):
         # 重置检测状态
         self.defect_detected = False
         self.camera_defect_status = [False, False, False, False]  # 重置每个摄像头的缺陷状态
+        self.defect_cameras = []  # 重置缺陷摄像头列表
+        self.defect_details = {}  # 重置缺陷详细信息
         
         # 如果在视频模式下，不需要恢复摄像头（因为视频模式下没有暂停）
         if not self.video_mode:
