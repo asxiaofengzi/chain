@@ -156,15 +156,76 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(camera_grid, 5)  # 视频流占据5/6的空间
         main_layout.addLayout(control_layout, 1)  # 控制按钮占据1/6的空间
     
+    def detect_available_cameras(self):
+        """
+        检测系统中可用的摄像头
+        
+        返回:
+            list: 可用摄像头的索引列表
+        """
+        available_cameras = []
+        
+        # 检测摄像头索引0-10
+        for i in range(10):
+            try:
+                # 尝试打开摄像头
+                cap = cv2.VideoCapture(i)
+                
+                # 检查是否成功打开
+                if cap.isOpened():
+                    # 尝试读取一帧来确认摄像头真正可用
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        available_cameras.append(i)
+                        print(f"检测到可用摄像头索引: {i}")
+                    cap.release()
+                else:
+                    # 在Windows上尝试使用DirectShow
+                    cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+                    if cap.isOpened():
+                        ret, frame = cap.read()
+                        if ret and frame is not None:
+                            available_cameras.append(i)
+                            print(f"检测到可用摄像头索引 (DirectShow): {i}")
+                    cap.release()
+                    
+            except Exception as e:
+                print(f"检测摄像头 {i} 时出错: {e}")
+                continue
+        
+        return available_cameras
+
     def start_detection(self):
         # 关闭视频模式
         self.video_mode = False
         
+        # 首先检测可用的摄像头
+        available_cameras = self.detect_available_cameras()
+        print(f"检测到可用摄像头: {available_cameras}")
+        
+        if not available_cameras:
+            QMessageBox.critical(self, "错误", "未检测到任何可用的摄像头，请检查连接")
+            return
+        
         # 启动所有摄像头
+        success_count = 0
         for i, camera in enumerate(self.cameras):
-            if not camera.start():
-                QMessageBox.critical(self, "错误", f"无法启动摄像头 {i+1}，请检查连接")
-                return
+            if i < len(available_cameras):
+                # 使用检测到的可用摄像头索引
+                camera_index = available_cameras[i]
+                if camera.start_with_index(camera_index):
+                    success_count += 1
+                    print(f"摄像头 {i+1} 成功启动 (使用索引 {camera_index})")
+                else:
+                    print(f"摄像头 {i+1} 启动失败")
+            else:
+                print(f"摄像头 {i+1} 跳过 (没有足够的可用摄像头)")
+        
+        if success_count == 0:
+            QMessageBox.critical(self, "错误", "所有摄像头启动失败，请检查连接")
+            return
+        elif success_count < 4:
+            QMessageBox.warning(self, "警告", f"只有 {success_count} 个摄像头启动成功")
         
         # 改变按钮状态
         self.start_btn.setEnabled(False)
@@ -269,7 +330,32 @@ class MainWindow(QMainWindow):
             # 生成多摄像头缺陷信息
             defect_summary = self.generate_multi_camera_defect_info()
             QMessageBox.information(self, "检测结果", defect_summary)
+            
+            # 自动执行标记缺陷功能
+            self.auto_mark_defects()
     
+    def auto_mark_defects(self):
+        """
+        自动标记检测到缺陷的摄像头
+        只对实际检测到缺陷的摄像头进行标注，提高效率
+        """
+        if not self.defect_detected:
+            return
+        
+        print(f"自动标记缺陷 - 检测到缺陷的摄像头: {[cam+1 for cam in self.defect_cameras]}")
+        
+        # 只对检测到缺陷的摄像头进行标注
+        for camera_id in self.defect_cameras:
+            frame = self.current_frames[camera_id]
+            if frame is not None:
+                # 重新检测该帧以获取准确的检测结果
+                results = self.detector.detect(frame)
+                if len(results.boxes) > 0:
+                    # 绘制检测结果并更新显示
+                    marked_frame = self.detector.draw_detections(frame)
+                    self.cameras[camera_id].update_image(marked_frame)
+                    print(f"摄像头 {camera_id+1} 已自动标记缺陷")
+
     def generate_multi_camera_defect_info(self):
         """
         生成多摄像头缺陷检测的汇总信息
@@ -346,7 +432,14 @@ class MainWindow(QMainWindow):
         return defect_info.rstrip()  # 移除最后的换行符
 
     def mark_defect(self):
-        # 标记当前帧上的缺陷
+        """
+        手动标记当前帧上的缺陷
+        这是用户手动点击"标记缺陷"按钮时调用的方法
+        """
+        print("手动标记缺陷按钮被点击")
+        
+        marked_cameras = []
+        
         if self.defect_detected or self.video_mode:
             for i, frame in enumerate(self.current_frames):
                 if frame is not None:
@@ -367,9 +460,17 @@ class MainWindow(QMainWindow):
                         # 只有检测到缺陷的摄像头才显示标注
                         marked_frame = self.detector.draw_detections(frame)
                         self.cameras[i].update_image(marked_frame)
+                        marked_cameras.append(i + 1)
                     else:
                         # 没有检测到缺陷的摄像头显示原始图像
                         self.cameras[i].update_image(frame)
+        
+        # 提供用户反馈
+        if marked_cameras:
+            camera_list = "、".join([f"摄像头{cam}" for cam in marked_cameras])
+            print(f"手动标记完成 - 已标记: {camera_list}")
+        else:
+            print("手动标记 - 未发现需要标记的缺陷")
     
     def save_image(self):
         # 保存当前帧

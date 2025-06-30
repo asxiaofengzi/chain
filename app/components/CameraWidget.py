@@ -59,61 +59,11 @@ class CameraWidget(QWidget):
         self.update_image(blank_image)
     
     def start(self):
-        """启动摄像头"""
-        try:
-            # 如果已经有打开的摄像头，先关闭
-            if self.capture is not None:
-                self.capture.release()
-                self.capture = None
-            
-            # 启动摄像头后显示标题
-            self.show_title = True
-            
-            # 方法1: 直接使用索引打开
-            self.capture = cv2.VideoCapture(self.camera_id)
-            
-            if not self.capture.isOpened():
-                print(f"方法1失败: 无法打开摄像头 {self.camera_id}")
-                
-                # 方法2: 使用DirectShow尝试打开
-                self.capture = cv2.VideoCapture(self.camera_id, cv2.CAP_DSHOW)
-                
-                if not self.capture.isOpened():
-                    print(f"方法2失败: 无法使用DirectShow打开摄像头 {self.camera_id}")
-                    
-                    # 方法3: 使用默认的摄像头
-                    self.capture = cv2.VideoCapture(0)
-                    
-                    if not self.capture.isOpened():
-                        print("方法3失败: 无法打开默认摄像头")
-                        return False
-            
-            # 设置摄像头参数 (可选)
-            self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1024)
-            
-            # 读取一帧测试是否正常
-            ret, frame = self.capture.read()
-            if not ret:
-                print(f"无法从摄像头读取图像")
-                self.capture.release()
-                self.capture = None
-                return False
-            
-            print(f"成功打开摄像头 ID: {self.camera_id}")
-            print(f"摄像头信息:")
-            print(f"- 宽度: {int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))}")
-            print(f"- 高度: {int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
-            print(f"- FPS: {self.capture.get(cv2.CAP_PROP_FPS)}")
-            
-            self.paused = False
-            return True
-        except Exception as e:
-            print(f"启动摄像头时出错: {e}")
-            if self.capture is not None:
-                self.capture.release()
-                self.capture = None
-            return False
+        """
+        启动摄像头（向后兼容方法）
+        使用摄像头的原始ID尝试启动
+        """
+        return self.start_with_index(self.camera_id)
     
     def set_video_file(self, video_path):
         """从视频文件加载视频"""
@@ -251,3 +201,64 @@ class CameraWidget(QWidget):
         super().resizeEvent(event)
         if self.frame is not None:
             self.update_image(self.frame)
+    
+    def start_with_index(self, camera_index):
+        """
+        使用指定的摄像头索引启动摄像头
+        
+        参数:
+            camera_index: 摄像头索引
+            
+        返回:
+            bool: 是否启动成功
+        """
+        try:
+            # 如果已经有打开的摄像头，先关闭
+            if self.capture is not None:
+                self.capture.release()
+                self.capture = None
+            
+            # 启动摄像头后显示标题
+            self.show_title = True
+            
+            print(f"尝试启动摄像头 {self.camera_id+1}，使用索引 {camera_index}")
+            
+            # 首先尝试直接打开
+            self.capture = cv2.VideoCapture(camera_index)
+            
+            if not self.capture.isOpened():
+                # 如果失败，尝试使用DirectShow (Windows)
+                print(f"直接打开失败，尝试使用DirectShow")
+                self.capture = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+            
+            if not self.capture.isOpened():
+                print(f"无法打开摄像头索引 {camera_index}")
+                return False
+            
+            # 设置摄像头参数
+            self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1024)
+            
+            # 读取一帧测试是否正常
+            ret, frame = self.capture.read()
+            if not ret:
+                print(f"无法从摄像头索引 {camera_index} 读取图像")
+                self.capture.release()
+                self.capture = None
+                return False
+            
+            print(f"成功启动摄像头 {self.camera_id+1} (索引 {camera_index})")
+            print(f"摄像头信息:")
+            print(f"- 宽度: {int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))}")
+            print(f"- 高度: {int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+            print(f"- FPS: {self.capture.get(cv2.CAP_PROP_FPS)}")
+            
+            self.paused = False
+            return True
+            
+        except Exception as e:
+            print(f"启动摄像头时出错: {e}")
+            if self.capture is not None:
+                self.capture.release()
+                self.capture = None
+            return False
